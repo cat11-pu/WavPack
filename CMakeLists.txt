@@ -299,6 +299,7 @@ set(WAVPACK_EXPORT_SYMBOLS
     WavpackPackSamples
     WavpackSeekSample
     WavpackSeekSample64
+    WavpackSeekTime64
     WavpackSeekTrailingWrapper
     WavpackSetChannelLayout
     WavpackSetConfiguration

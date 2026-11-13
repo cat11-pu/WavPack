@@ -35,6 +35,41 @@ int WavpackSeekSample (WavpackContext *wpc, uint32_t sample)
     return WavpackSeekSample64 (wpc, sample);
 }
 
+// Seek to the specified time in seconds, returning the resulting sample index
+// on success or -1 on error. The time is converted to a sample index using the
+// file's sample rate (rounded to the nearest sample) and clamped to the valid
+// range, so negative times seek to the first sample and times beyond the end
+// seek to the final sample. Because WavPack blocks are independently decodable,
+// the seek lands on the nearest decodable block at or before the target and any
+// leading samples are decoded and discarded internally, making the result
+// sample-accurate (i.e., identical to decoding sequentially from the start).
+// After a -1 return the file should not be accessed again (other than to close
+// it); this is a fatal error.
+
+int64_t WavpackSeekTime64 (WavpackContext *wpc, double seconds)
+{
+    uint32_t sample_rate = WavpackGetSampleRate (wpc);
+    int64_t total_samples = WavpackGetNumSamples64 (wpc);
+    int64_t sample;
+
+    if (!sample_rate || total_samples <= 0)
+        return -1;
+
+    if (seconds <= 0.0)
+        sample = 0;
+    else {
+        sample = (int64_t) (seconds * sample_rate + 0.5);
+
+        if (sample >= total_samples)
+            sample = total_samples - 1;
+    }
+
+    if (!WavpackSeekSample64 (wpc, sample))
+        return -1;
+
+    return WavpackGetSampleIndex64 (wpc);
+}
+
 int WavpackSeekSample64 (WavpackContext *wpc, int64_t sample)
 {
     WavpackStream *wps = wpc->streams ? wpc->streams [0] : NULL;
@@ -388,4 +423,3 @@ static int64_t find_sample (WavpackContext *wpc, void *infile, int64_t header_po
 }
 
 #endif
-

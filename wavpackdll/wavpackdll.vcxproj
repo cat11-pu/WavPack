@@ -118,7 +118,7 @@
 
 /export:WavpackOpenRawDecoder /export:WavpackOpenFileInputEx64
 /export:WavpackGetNumSamples64 /export:WavpackGetSampleIndex64
-/export:WavpackSeekSample64 /export:WavpackGetFileSize64
+/export:WavpackSeekSample64 /export:WavpackSeekTime64 /export:WavpackGetFileSize64
 /export:WavpackGetQualifyMode /export:WavpackGetFileExtension
 /export:WavpackGetFileFormat /export:WavpackGetNumSamplesInFrame
 /export:WavpackGetNativeSampleRate /export:WavpackGetChannelIdentities
@@ -176,7 +176,7 @@
 
 /export:WavpackOpenRawDecoder /export:WavpackOpenFileInputEx64
 /export:WavpackGetNumSamples64 /export:WavpackGetSampleIndex64
-/export:WavpackSeekSample64 /export:WavpackGetFileSize64
+/export:WavpackSeekSample64 /export:WavpackSeekTime64 /export:WavpackGetFileSize64
 /export:WavpackGetQualifyMode /export:WavpackGetFileExtension
 /export:WavpackGetFileFormat /export:WavpackGetNumSamplesInFrame
 /export:WavpackGetNativeSampleRate /export:WavpackGetChannelIdentities
@@ -234,7 +234,7 @@
 
 /export:WavpackOpenRawDecoder /export:WavpackOpenFileInputEx64
 /export:WavpackGetNumSamples64 /export:WavpackGetSampleIndex64
-/export:WavpackSeekSample64 /export:WavpackGetFileSize64
+/export:WavpackSeekSample64 /export:WavpackSeekTime64 /export:WavpackGetFileSize64
 /export:WavpackGetQualifyMode /export:WavpackGetFileExtension
 /export:WavpackGetFileFormat /export:WavpackGetNumSamplesInFrame
 /export:WavpackGetNativeSampleRate /export:WavpackGetChannelIdentities
@@ -297,7 +297,7 @@
 
 /export:WavpackOpenRawDecoder /export:WavpackOpenFileInputEx64
 /export:WavpackGetNumSamples64 /export:WavpackGetSampleIndex64
-/export:WavpackSeekSample64 /export:WavpackGetFileSize64
+/export:WavpackSeekSample64 /export:WavpackSeekTime64 /export:WavpackGetFileSize64
 /export:WavpackGetQualifyMode /export:WavpackGetFileExtension
 /export:WavpackGetFileFormat /export:WavpackGetNumSamplesInFrame
 /export:WavpackGetNativeSampleRate /export:WavpackGetChannelIdentities

@@ -41,6 +41,7 @@ static const char *version_warning = "\n"
 static const char *usage =
 " Usage:   WVTEST --default|--exhaustive [-options]\n"
 "          WVTEST [-options] --seektest[=n] file.wv [...] (n=runs per file, def=1)\n\n"
+"          WVTEST [-options] --seektime[=n] file.wv [...] (time-based seek test)\n\n"
 " Options: --default           = perform the default test suite\n"
 "          --exhaustive        = perform the exhaustive test suite\n"
 "          --short             = perform shorter runs of each test\n"
@@ -114,6 +115,7 @@ struct audio_generator {
 };
 
 static int seeking_test (char *filename, int32_t test_count, int test_flags);
+static int seeking_time_test (char *filename, int32_t test_count, int test_flags);
 static void tone_generator_init (struct audio_generator *cxt, int sample_rate, int low_freq, int high_freq);
 static void noise_generator_init (struct audio_generator *cxt, double factor);
 static void audio_generator_run (struct audio_generator *cxt, float *samples, int num_samples);
@@ -151,7 +153,7 @@ static WavpackStreamReader freader;
 int main (argc, argv) int argc; char **argv;
 {
     int wpconfig_flags = CONFIG_MD5_CHECKSUM | CONFIG_OPTIMIZE_MONO, test_flags = 0, base_minutes = 2, res = 0;
-    int seektest = 0;
+    int seektest = 0, seektime = 0;
 
     // loop through command-line arguments
 
@@ -240,6 +242,15 @@ int main (argc, argv) int argc; char **argv;
                 if (seektest)
                     break;
             }
+            else if (!strncmp (long_option, "seektime", 8)) {           // --seektime[=n]
+                if (*long_param)
+                    seektime = strtol (long_param, NULL, 10);
+                else
+                    seektime = 1;
+
+                if (seektime)
+                    break;
+            }
             else if (!strcmp (long_option, "seek-dsd-pcm")) {           // --seek-dsd-pcm
                 test_flags |= TEST_SEEK_DSD_PCM;
             }
@@ -278,7 +289,7 @@ int main (argc, argv) int argc; char **argv;
     else
         printf (sign_on, VERSION_OS, WavpackGetLibraryVersionString ());
 
-    if (!seektest && !(test_flags & (TEST_FLAG_DEFAULT | TEST_FLAG_EXHAUSTIVE))) {
+    if (!seektest && !seektime && !(test_flags & (TEST_FLAG_DEFAULT | TEST_FLAG_EXHAUSTIVE))) {
         puts (usage);
         return 1;
     }
@@ -286,6 +297,11 @@ int main (argc, argv) int argc; char **argv;
     if (seektest) {
         while (--argc)
             if ((res = seeking_test (*++argv, seektest, test_flags)))
+                break;
+    }
+    else if (seektime) {
+        while (--argc)
+            if ((res = seeking_time_test (*++argv, seektime, test_flags)))
                 break;
     }
     else {
@@ -583,6 +599,284 @@ static int seeking_test (char *filename, int32_t test_count, int test_flags)
         free (decoded_samples);
     }
 
+    WavpackCloseFile (wpc);
+    return 0;
+}
+
+// Function to stress-test the WavpackSeekTime64() API. Given the specified WavPack
+// file, first decode the entire file sequentially, calculating the MD5 sums of
+// fixed-size sample chunks (this is the reference). Then perform the specified
+// number of test runs in which we seek to random times (in seconds) using
+// WavpackSeekTime64() and verify that (1) the resulting sample index matches the
+// requested time converted to samples (the positioning error must not exceed one
+// frame, and is normally exactly zero) and (2) the samples decoded after the seek
+// are bit-identical to the same samples decoded sequentially (via chunk MD5s).
+
+static int seeking_time_test (char *filename, int32_t test_count, int test_flags)
+{
+    char error [80];
+    int open_flags = OPEN_WVC | OPEN_ALT_TYPES | (test_flags & TEST_SEEK_DSD_PCM ? OPEN_DSD_AS_PCM : OPEN_DSD_NATIVE);
+    int64_t min_chunk_size = 256, total_samples, sample_count = 0, max_frame_error = 0;
+    int32_t *decoded_samples, num_chans, bps, qmode, test_index;
+    uint32_t chunk_samples, total_chunks, sample_rate;
+    unsigned char md5_initial [16], md5_stored [16];
+    MD5_CTX md5_global, md5_local;
+    unsigned char *chunked_md5;
+    WavpackContext *wpc;
+
+    if (*filename == '-') {
+        printf ("\nseeking_time_test(): error \"%s\" opening input file \"%s\"\n", "name begins with dash", filename);
+        return -1;
+    }
+
+    if (test_flags & TEST_SEEK_2CH_MAX)
+        open_flags |= OPEN_2CH_MAX;
+
+    if (worker_threads)
+        open_flags |= worker_threads << OPEN_THREADS_SHFT;
+
+    wpc = WavpackOpenFileInput (filename, error, open_flags, 0);
+
+    printf ("\n-------------------- file: %s %s--------------------\n",
+        filename, (WavpackGetMode (wpc) & MODE_WVC) ? "(+wvc) " : "");
+
+    if (!wpc) {
+        printf ("seeking_time_test(): error \"%s\" opening input file \"%s\"\n", error, filename);
+        return -1;
+    }
+
+    num_chans = WavpackGetReducedChannels (wpc);
+    total_samples = WavpackGetNumSamples64 (wpc);
+    sample_rate = WavpackGetSampleRate (wpc);
+    bps = WavpackGetBytesPerSample (wpc);
+    qmode = WavpackGetQualifyMode (wpc);
+
+    if (total_samples < 2 || total_samples == -1 || !sample_rate) {
+        printf ("seeking_time_test(): can't determine file size or sample rate!\n");
+        return -1;
+    }
+
+    if (qmode & QMODE_DSD_IN_BLOCKS) {
+        printf ("seeking_time_test(): can't handle blocked DSD audio (i.e., from .dsf files)!\n");
+        return -1;
+    }
+
+    // For very short files, reduce the minimum chunk size
+
+    while (min_chunk_size > 1 && total_samples / min_chunk_size < 256)
+        min_chunk_size /= 2;
+
+    if (test_flags & TEST_SEEK_SHORT_CHUNKS)
+        chunk_samples = (uint32_t) (1 + frandom () * 256);      // 1 - 256 (could fail with long files)
+    else
+        chunk_samples = (uint32_t) min_chunk_size;
+
+    total_chunks = (uint32_t) ((total_samples + chunk_samples - 1) / chunk_samples);
+    decoded_samples = malloc (sizeof (int32_t) * chunk_samples * num_chans);
+    chunked_md5 = malloc (total_chunks * 16);
+
+    if (!chunked_md5 || !decoded_samples) {
+        printf ("seeking_time_test(): can't allocate memory!\n");
+        return -1;
+    }
+
+    // reference pass: sequentially decode the entire file, calculating the MD5
+    // sum of the whole file and of each fixed-size chunk of samples
+
+    printf ("\ncreating reference by decoding file in %u-sample chunks:\n", chunk_samples);
+
+    {
+        uint32_t chunk_count = 0;
+
+        sample_count = 0;
+        MD5_Init (&md5_global);
+
+        while (1) {
+            int samples = WavpackUnpackSamples (wpc, decoded_samples, chunk_samples);
+
+            if (!samples)
+                break;
+
+            if ((sample_count += samples) > total_samples || chunk_count >= total_chunks) {
+                printf ("seeking_time_test(): WavPack file is invalid or corrupt!\n");
+                return -1;
+            }
+
+            store_samples (decoded_samples, decoded_samples, qmode, bps, samples * num_chans);
+            MD5_Update (&md5_global, (unsigned char *) decoded_samples, bps * samples * num_chans);
+
+            MD5_Init (&md5_local);
+            MD5_Update (&md5_local, (unsigned char *) decoded_samples, bps * samples * num_chans);
+            MD5_Final (chunked_md5 + chunk_count * 16, &md5_local);
+            chunk_count++;
+        }
+
+        if (WavpackGetNumErrors (wpc)) {
+            printf ("seeking_time_test(): decoder reported %d errors!\n", WavpackGetNumErrors (wpc));
+            return -1;
+        }
+
+        if (total_samples != sample_count || total_chunks != chunk_count) {
+            printf ("seeking_time_test(): sample or chunk count is not correct!\n");
+            return -1;
+        }
+
+        MD5_Final (md5_initial, &md5_global);
+
+        if (WavpackGetMD5Sum (wpc, md5_stored) && (WavpackGetMode (wpc) & MODE_LOSSLESS) &&
+            !(test_flags & TEST_SEEK_DSD_PCM) && memcmp (md5_stored, md5_initial, sizeof (md5_stored))) {
+                printf ("seeking_time_test(): MD5 does not match MD5 stored in file!\n");
+                return -1;
+        }
+
+        printf ("reference: %lld samples, %u Hz, %d ch, %d bytes/sample, duration %.3f sec\n",
+            (long long int) total_samples, sample_rate, (int) num_chans, (int) bps,
+            (double) total_samples / sample_rate);
+    }
+
+    // reopen the file so that all seeks go to positions never decoded in this session
+
+    WavpackCloseFile (wpc);
+    wpc = WavpackOpenFileInput (filename, error, open_flags, 0);
+
+    if (!wpc) {
+        printf ("seeking_time_test(): error \"%s\" reopening input file \"%s\"\n", error, filename);
+        return -1;
+    }
+
+    for (test_index = 0; test_index < test_count; test_index++) {
+        int64_t chunks_to_verify = total_chunks * 4;    // decode each chunk 4 times, on average
+        uint32_t seek_count = 0;
+
+        // half the time, reopen the file to catch errors caused by seeking to
+        // locations that have never been decoded (at least not for this open call)
+
+        if (frandom () < 0.5) {
+            WavpackCloseFile (wpc);
+            wpc = WavpackOpenFileInput (filename, error, open_flags, 0);
+
+            if (!wpc) {
+                printf ("seeking_time_test(): error \"%s\" reopening input file \"%s\"\n", error, filename);
+                return -1;
+            }
+        }
+
+        while (chunks_to_verify > 0) {
+            double seek_time = frandom () * total_samples / sample_rate;
+            int64_t expected_sample, landed_sample, frame_error;
+            uint32_t offset_in_chunk, first_chunk;
+            int num_chunks = 1, current_chunk;
+
+            // this is the same time-to-sample conversion the library performs
+
+            expected_sample = (int64_t) (seek_time * sample_rate + 0.5);
+
+            if (expected_sample >= total_samples)
+                expected_sample = total_samples - 1;
+
+            landed_sample = WavpackSeekTime64 (wpc, seek_time);
+
+            if (landed_sample < 0) {
+                printf ("seeking_time_test(): seek to %.6f seconds failed!\n", seek_time);
+                return -1;
+            }
+
+            frame_error = landed_sample - expected_sample;
+
+            if (frame_error < 0)
+                frame_error = -frame_error;
+
+            if (frame_error > max_frame_error)
+                max_frame_error = frame_error;
+
+            if (frame_error > 1) {
+                printf ("seeking_time_test(): positioning error of %lld frames exceeds 1-frame limit!\n",
+                    (long long int) frame_error);
+                return -1;
+            }
+
+            if (WavpackGetSampleIndex64 (wpc) != landed_sample) {
+                printf ("seeking_time_test(): WavpackGetSampleIndex64() error!\n");
+                return -1;
+            }
+
+            // decode and discard the rest of the partial chunk that the seek landed
+            // in so that the following samples align with the reference chunks
+
+            offset_in_chunk = (uint32_t) (landed_sample % chunk_samples);
+            first_chunk = (uint32_t) (landed_sample / chunk_samples);
+
+            if (offset_in_chunk) {
+                int64_t remaining = total_samples - landed_sample;
+                uint32_t discard = chunk_samples - offset_in_chunk;
+                int samples;
+
+                if (discard > remaining)
+                    discard = (uint32_t) remaining;
+
+                samples = WavpackUnpackSamples (wpc, decoded_samples, discard);
+
+                if (samples != (int) discard || WavpackGetSampleIndex64 (wpc) != landed_sample + discard) {
+                    printf ("seeking_time_test(): decode error after seek to %.6f seconds!\n", seek_time);
+                    return -1;
+                }
+
+                first_chunk++;
+            }
+
+            // verify a random number of whole chunks after the seek point; the
+            // decoded samples must be bit-identical to the sequential reference
+
+            while (first_chunk + num_chunks < total_chunks && frandom () < 0.667)
+                num_chunks *= 2;
+
+            if (first_chunk + num_chunks > total_chunks)
+                num_chunks = total_chunks - first_chunk;
+
+            for (current_chunk = first_chunk; current_chunk < first_chunk + num_chunks; ++current_chunk) {
+                int samples = WavpackUnpackSamples (wpc, decoded_samples, chunk_samples);
+                unsigned char md5_chunk [16];
+
+                if (!samples) {
+                    printf ("seeking_time_test(): decode error after seek to %.6f seconds!\n", seek_time);
+                    return -1;
+                }
+
+                store_samples (decoded_samples, decoded_samples, qmode, bps, samples * num_chans);
+
+                MD5_Init (&md5_local);
+                MD5_Update (&md5_local, (unsigned char *) decoded_samples, bps * samples * num_chans);
+                MD5_Final (md5_chunk, &md5_local);
+
+                if (memcmp (chunked_md5 + current_chunk * 16, md5_chunk, sizeof (md5_chunk))) {
+                    printf ("seeking_time_test(): seek+decode mismatch at sample %lld (time %.6f)!\n",
+                        (long long int) current_chunk * chunk_samples, seek_time);
+                    return -1;
+                }
+
+                chunks_to_verify--;
+            }
+
+            // display the "dot" every 10 seeks
+
+            if (++seek_count % 10 == 0) {
+                if (seek_count % 640) {
+                    putchar ('.'); fflush (stdout);
+                }
+                else
+                    puts (".");
+            }
+        }
+
+        printf ("\nresult: %u successful time-seeks on run %d, max positioning error so far = %lld frame(s)\n",
+            seek_count, test_index + 1, (long long int) max_frame_error);
+    }
+
+    printf ("summary: %s: all time-seek output bit-identical to sequential decode, "
+        "max positioning error = %lld frame(s) (limit 1)\n", filename, (long long int) max_frame_error);
+
+    free (chunked_md5);
+    free (decoded_samples);
     WavpackCloseFile (wpc);
     return 0;
 }

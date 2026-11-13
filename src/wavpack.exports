@@ -20,6 +20,7 @@
 ++'WavpackLossyBlocks'.'wavpack.dll'.'WavpackLossyBlocks'
 ++'WavpackSeekSample'.'wavpack.dll'.'WavpackSeekSample'
 ++'WavpackSeekSample64'.'wavpack.dll'.'WavpackSeekSample64'
++'WavpackSeekTime64'.'wavpack.dll'.'WavpackSeekTime64'
 ++'WavpackCloseFile'.'wavpack.dll'.'WavpackCloseFile'
 ++'WavpackGetSampleRate'.'wavpack.dll'.'WavpackGetSampleRate'
 ++'WavpackGetNativeSampleRate'.'wavpack.dll'.'WavpackGetNativeSampleRate'

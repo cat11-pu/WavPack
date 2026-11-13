@@ -369,6 +369,7 @@ int WavpackGetNumErrors (WavpackContext *wpc);
 int WavpackLossyBlocks (WavpackContext *wpc);
 int WavpackSeekSample (WavpackContext *wpc, uint32_t sample);
 int WavpackSeekSample64 (WavpackContext *wpc, int64_t sample);
+int64_t WavpackSeekTime64 (WavpackContext *wpc, double seconds);
 WavpackContext *WavpackCloseFile (WavpackContext *wpc);
 uint32_t WavpackGetSampleRate (WavpackContext *wpc);
 uint32_t WavpackGetNativeSampleRate (WavpackContext *wpc);
