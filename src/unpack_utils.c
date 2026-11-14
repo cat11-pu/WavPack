@@ -187,7 +187,7 @@ uint32_t WavpackUnpackSamples (WavpackContext *wpc, int32_t *buffer, uint32_t sa
                 // if this block has audio, but not the sample index we were expecting, flag an error
 
                 if (!wpc->reduced_channels && wps->wphdr.block_samples && wps->sample_index != GET_BLOCK_INDEX (wps->wphdr))
-                    wpc->crc_errors++;
+                    mark_block_error (wpc);
 
                 // if this block has audio, and we're in hybrid lossless mode, read the matching wvc block
 
@@ -198,7 +198,7 @@ uint32_t WavpackUnpackSamples (WavpackContext *wpc, int32_t *buffer, uint32_t sa
 
                 if (!wps->wphdr.block_samples) {
                     if (!wps->init_done && !unpack_init (wpc, 0))
-                        wpc->crc_errors++;
+                        mark_block_error (wpc);
 
                     wps->init_done = TRUE;
                 }
@@ -251,7 +251,7 @@ uint32_t WavpackUnpackSamples (WavpackContext *wpc, int32_t *buffer, uint32_t sa
             samples_to_unpack = samples;
 
         if (!wps->init_done && !unpack_init (wpc, 0))
-            wpc->crc_errors++;
+            mark_block_error (wpc);
 
         wps->init_done = TRUE;
 
@@ -329,7 +329,7 @@ uint32_t WavpackUnpackSamples (WavpackContext *wpc, int32_t *buffer, uint32_t sa
                     // initialize the unpacker for this block
 
                     if (!unpack_init (wpc, stream_index))
-                        wpc->crc_errors++;
+                        mark_block_error (wpc);
 
                     wps->init_done = TRUE;
                 }
@@ -350,13 +350,13 @@ uint32_t WavpackUnpackSamples (WavpackContext *wpc, int32_t *buffer, uint32_t sa
                     unpack_samples_interleave (wps, bptr, offset, temp_buffer, samples_to_unpack);
 
                     if (wps->sample_index == GET_BLOCK_INDEX (wps->wphdr) + wps->wphdr.block_samples && wps->mute_error)
-                        wpc->crc_errors++;
+                        mark_block_error (wpc);
                 }
 
                 if (wps->wphdr.flags & MONO_FLAG)
                     offset++;
                 else if (offset == num_channels - 1) {
-                    wpc->crc_errors++;
+                    mark_block_error (wpc);
                     offset++;
                 }
                 else
@@ -389,7 +389,7 @@ uint32_t WavpackUnpackSamples (WavpackContext *wpc, int32_t *buffer, uint32_t sa
                 else
                     memset (bptr, 0, samples_to_unpack * num_channels * 4);
 
-                wpc->crc_errors++;
+                mark_block_error (wpc);
             }
 
             // go back to the first stream (we're going to leave them all loaded for now because they might have more samples)
@@ -401,7 +401,7 @@ uint32_t WavpackUnpackSamples (WavpackContext *wpc, int32_t *buffer, uint32_t sa
         else if (!(wps->wphdr.flags & MONO_FLAG) && (num_channels == 1 || wpc->reduced_channels == 1)) {
             memset (bptr, 0, samples_to_unpack * sizeof (*bptr));
             wps->sample_index += samples_to_unpack;
-            wpc->crc_errors++;
+            mark_block_error (wpc);
         }
 #ifdef ENABLE_THREADS
         // This is where temporal multithreaded decoding occurs. If there's a worker thread available, and no errors
@@ -445,7 +445,7 @@ uint32_t WavpackUnpackSamples (WavpackContext *wpc, int32_t *buffer, uint32_t sa
                 unpack_samples (wps, bptr, samples_to_unpack);
 
             if (wps->sample_index == GET_BLOCK_INDEX (wps->wphdr) + wps->wphdr.block_samples && wps->mute_error)
-                wpc->crc_errors++;
+                mark_block_error (wpc);
         }
 
         if (file_done) {

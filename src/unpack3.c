@@ -349,7 +349,7 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
 
                     sample [0] [0] += sample [0] [1] += read_word;
                     getbits (&temp, 4, &wps->wvbits);
-                    crc = crc * 3 + (temp = (temp & 0xf) + (sample [0] [0] << 4));
+                    crc = crc * 3 + (temp = (temp & 0xf) + ((uint32_t) sample [0] [0] << 4));
                     *bptr++ = temp;
                 }
             else
@@ -405,7 +405,7 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
                             ++wps->dc.extra_bits_count;
                     }
 
-                    crc = crc * 3 + (temp = wps->dc.last_extra_bits + (read_word << 4));
+                    crc = crc * 3 + (temp = wps->dc.last_extra_bits + ((uint32_t) read_word << 4));
                     *bptr++ = temp;
                 }
                 else {
@@ -444,7 +444,7 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
                             ++wps->dc.extra_bits_count;
                     }
 
-                    crc = crc * 3 + (*bptr++ = temp = wps->dc.last_extra_bits + (sample [0] [0] << 4));
+                    crc = crc * 3 + (*bptr++ = temp = wps->dc.last_extra_bits + ((uint32_t) sample [0] [0] << 4));
                 }
                 else {
                     crc = crc * 3 + sample [0] [0];
@@ -469,12 +469,12 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
                     if (read_word == WORD_EOF)
                         break;
 
-                    sum = (read_word << 1) | ((diff = get_word3 (wps, 1)) & 1);
+                    sum = ((uint32_t) read_word << 1) | ((diff = get_word3 (wps, 1)) & 1);
                     sample [0] [0] += sample [0] [1] += ((sum + diff) >> 1);
                     sample [1] [0] += sample [1] [1] += ((sum - diff) >> 1);
                     getbits (&temp, 8, &wps->wvbits);
-                    crc = crc * 3 + (*bptr++ = (sample [0] [0] << 4) + ((temp >> 4) & 0xf));
-                    crc = crc * 3 + (*bptr++ = (sample [1] [0] << 4) + (temp & 0xf));
+                    crc = crc * 3 + (*bptr++ = ((uint32_t) sample [0] [0] << 4) + ((temp >> 4) & 0xf));
+                    crc = crc * 3 + (*bptr++ = ((uint32_t) sample [1] [0] << 4) + (temp & 0xf));
                 }
             else
                 for (bptr = buffer, i = 0; i < sample_count; ++i) {
@@ -524,7 +524,7 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
                                 diff = read_word;
 
                                 if (sum_level < left_level) {
-                                    sum = (next_word << 1) | (diff & 1);
+                                    sum = ((uint32_t) next_word << 1) | (diff & 1);
                                     left = (sum + diff) >> 1;
                                     right = (sum - diff) >> 1;
                                 }
@@ -541,7 +541,7 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
                                 diff = read_word;
 
                                 if (sum_level < right_level) {
-                                    sum = (next_word << 1) | (diff & 1);
+                                    sum = ((uint32_t) next_word << 1) | (diff & 1);
                                     left = (sum + diff) >> 1;
                                     right = (sum - diff) >> 1;
                                 }
@@ -559,7 +559,7 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
                         next_word = get_old_word1 (wps, 1);
 
                         if (sum_level <= right_level && sum_level <= left_level) {
-                            sum = (next_word << 1) | (read_word & 1);
+                            sum = ((uint32_t) next_word << 1) | (read_word & 1);
                             left = (sum + read_word) >> 1;
                             right = (sum - read_word) >> 1;
                         }
@@ -667,8 +667,8 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
                             ++wps->dc.extra_bits_count;
                     }
 
-                    crc = crc * 3 + (*bptr++ = left = (left << 4) + (wps->dc.last_extra_bits >> 4));
-                    crc = crc * 3 + (*bptr++ = right = (right << 4) + (wps->dc.last_extra_bits & 0xf));
+                    crc = crc * 3 + (*bptr++ = left = ((uint32_t) left << 4) + (wps->dc.last_extra_bits >> 4));
+                    crc = crc * 3 + (*bptr++ = right = ((uint32_t) right << 4) + (wps->dc.last_extra_bits & 0xf));
                 }
                 else {
                     crc = crc * 9 + left * 3 + right;
@@ -736,8 +736,8 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
                             ++wps->dc.extra_bits_count;
                     }
 
-                    crc = crc * 3 + (*bptr++ = left2 = (sample [0] [0] << 4) + (wps->dc.last_extra_bits >> 4));
-                    crc = crc * 3 + (*bptr++ = right2 = (sample [1] [0] << 4) + (wps->dc.last_extra_bits & 0xf));
+                    crc = crc * 3 + (*bptr++ = left2 = ((uint32_t) sample [0] [0] << 4) + (wps->dc.last_extra_bits >> 4));
+                    crc = crc * 3 + (*bptr++ = right2 = ((uint32_t) sample [1] [0] << 4) + (wps->dc.last_extra_bits & 0xf));
                 }
                 else {
                     crc = crc * 9 + sample [0] [0] * 3 + sample [1] [0];
@@ -961,7 +961,7 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
                 }
 
                 if (flags & JOINT_STEREO) {
-                    right = ((sum = (right << 1) | (left & 1)) - (diff = left)) >> 1;
+                    right = ((sum = ((uint32_t) right << 1) | (left & 1)) - (diff = left)) >> 1;
                     left = (sum + diff) >> 1;
                 }
 
@@ -1171,8 +1171,10 @@ int32_t unpack_samples3 (WavpackContext *wpc, int32_t *buffer, uint32_t sample_c
 
     if (i && (wps->sample_index += i) == wpc->total_samples) {
 
-        if (wps->wphdr.version == 3 && crc != (wpc->wvc_flag ? wps->wphdr.crc2 : wps->wphdr.crc))
+        if (wps->wphdr.version == 3 && crc != (wpc->wvc_flag ? wps->wphdr.crc2 : wps->wphdr.crc)) {
+            wpc->error_block_offset = wps->wvbits.fpos;
             wpc->crc_errors++;
+        }
 
         if (wpc->open_flags & OPEN_WRAPPER) {
             unsigned char *temp = (unsigned char *)malloc (1024);
@@ -1705,4 +1707,3 @@ static unsigned char *bs_unused_data (Bitstream3 *bs)
 }
 
 #endif  // ENABLE_LEGACY
-

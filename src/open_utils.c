@@ -50,6 +50,7 @@ WavpackContext *WavpackOpenFileInputEx64 (WavpackStreamReader64 *reader, void *w
     wpc->wvc_in = wvc_id;
     wpc->reader = reader;
     wpc->total_samples = -1;
+    wpc->error_block_offset = -1;
     wpc->norm_offset = norm_offset;
     wpc->max_streams = OLD_MAX_STREAMS;     // use this until overwritten with actual number
     wpc->open_flags = flags;
@@ -127,7 +128,7 @@ WavpackContext *WavpackOpenFileInputEx64 (WavpackStreamReader64 *reader, void *w
             wps->wphdr.block_samples = 0;
             free (wps->blockbuff);
             wps->blockbuff = NULL;
-            wpc->crc_errors++;
+            mark_block_error (wpc);
             continue;
         }
 
@@ -948,6 +949,18 @@ int WavpackGetMD5Sum (WavpackContext *wpc, unsigned char data [16])
 // to indicate the error. No additional bytes are read past the header and it
 // is returned in the processor's native endian mode. Seeking is not required.
 
+// Record a malformed/corrupt block on the context: bump the running error count and remember the
+// byte offset of the block being processed so callers can locate the offending block. The offset
+// comes from wpc->filepos, which is set to the block header position after every header read.
+
+void mark_block_error (WavpackContext *wpc)
+{
+    wpc->crc_errors++;
+
+    if (wpc->filepos >= 0)
+        wpc->error_block_offset = wpc->filepos;
+}
+
 uint32_t read_next_header (WavpackStreamReader64 *reader, void *id, WavpackHeader *wphdr)
 {
     unsigned char buffer [sizeof (*wphdr)], *sp = buffer + sizeof (*wphdr), *ep = sp;
@@ -972,6 +985,15 @@ uint32_t read_next_header (WavpackStreamReader64 *reader, void *id, WavpackHeade
             sp [4] >= (MIN_STREAM_VERS & 0xff) && sp [4] <= (MAX_STREAM_VERS & 0xff) && sp [18] < 3 && !sp [19]) {
                 memcpy (wphdr, buffer, sizeof (*wphdr));
                 WavpackLittleEndianToNative (wphdr, WavpackHeaderFormat);
+
+                // Reject blocks whose declared size is too small to hold the 32-byte header or which
+                // exceed the maximum block size we are willing to buffer. A crafted ckSize near 4 GB
+                // would otherwise trigger an enormous (multi-gigabyte) allocation before the short
+                // read is detected, so fail cleanly here instead.
+
+                if (wphdr->ckSize + 8 < sizeof (WavpackHeader) || wphdr->ckSize > MAX_BLOCK_BYTES)
+                    return -1;
+
                 return bytes_skipped;
             }
 
@@ -1043,7 +1065,7 @@ int read_wvc_block (WavpackContext *wpc, int stream)
 
         if (bcount == (uint32_t) -1) {
             wps->wvc_skip = TRUE;
-            wpc->crc_errors++;
+            mark_block_error (wpc);
             return FALSE;
         }
 
@@ -1069,7 +1091,7 @@ int read_wvc_block (WavpackContext *wpc, int stream)
                     free (wps->block2buff);
                     wps->block2buff = NULL;
                     wps->wvc_skip = TRUE;
-                    wpc->crc_errors++;
+                    mark_block_error (wpc);
                     return FALSE;
             }
 
@@ -1080,7 +1102,7 @@ int read_wvc_block (WavpackContext *wpc, int stream)
                 free (wps->block2buff);
                 wps->block2buff = NULL;
                 wps->wvc_skip = TRUE;
-                wpc->crc_errors++;
+                mark_block_error (wpc);
                 return TRUE;
             }
 
@@ -1092,7 +1114,7 @@ int read_wvc_block (WavpackContext *wpc, int stream)
         else if (compare_result == -1) {
             wps->wvc_skip = TRUE;
             wpc->reader->set_pos_rel (wpc->wvc_in, -32, SEEK_CUR);
-            wpc->crc_errors++;
+            mark_block_error (wpc);
             return TRUE;
         }
     }

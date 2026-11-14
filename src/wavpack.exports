@@ -17,6 +17,7 @@
 ++'WavpackGetSampleIndex'.'wavpack.dll'.'WavpackGetSampleIndex'
 ++'WavpackGetSampleIndex64'.'wavpack.dll'.'WavpackGetSampleIndex64'
 ++'WavpackGetNumErrors'.'wavpack.dll'.'WavpackGetNumErrors'
++'WavpackGetErrorOffset64'.'wavpack.dll'.'WavpackGetErrorOffset64'
 ++'WavpackLossyBlocks'.'wavpack.dll'.'WavpackLossyBlocks'
 ++'WavpackSeekSample'.'wavpack.dll'.'WavpackSeekSample'
 ++'WavpackSeekSample64'.'wavpack.dll'.'WavpackSeekSample64'

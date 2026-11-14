@@ -256,6 +256,7 @@ typedef struct bs {
 } Bitstream;
 
 #define MAX_WRAPPER_BYTES 16777216
+#define MAX_BLOCK_BYTES   16777216        // maximum accepted ckSize for a single WavPack block
 #define NEW_MAX_STREAMS 4096
 #define OLD_MAX_STREAMS 8
 #define MAX_NTERMS 16
@@ -396,6 +397,7 @@ struct WavpackContext {
 
     int64_t filelen, file2len, filepos, file2pos, total_samples, initial_index;
     uint32_t crc_errors, first_flags;
+    int64_t error_block_offset;       // file byte offset of the most recent malformed block, or -1
     int wvc_flag, open_flags, norm_offset, reduced_channels, lossy_blocks, version_five;
     uint32_t block_samples, ave_block_samples, block_boundary, max_samples, max_pre_samples, acc_samples, riff_trailer_bytes;
     int riff_header_added, riff_header_created;
@@ -726,6 +728,7 @@ int WavpackGetMD5Sum (WavpackContext *wpc, unsigned char data [16]);
 
 int WavpackVerifySingleBlock (unsigned char *buffer, int verify_checksum);
 uint32_t read_next_header (WavpackStreamReader64 *reader, void *id, WavpackHeader *wphdr);
+void mark_block_error (WavpackContext *wpc);
 int read_wvc_block (WavpackContext *wpc, int stream);
 
 /////////////////////////// high-level packing API and support ////////////////////////////
@@ -802,4 +805,3 @@ int valid_tag (M_Tag *m_tag);
 int editable_tag (M_Tag *m_tag);
 
 #endif
-

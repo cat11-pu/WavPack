@@ -366,6 +366,13 @@ uint32_t WavpackGetNumSamplesInFrame (WavpackContext *wpc);
 uint32_t WavpackGetSampleIndex (WavpackContext *wpc);
 int64_t WavpackGetSampleIndex64 (WavpackContext *wpc);
 int WavpackGetNumErrors (WavpackContext *wpc);
+
+// Return the byte offset (within the .wv stream) of the most recent block that failed
+// verification or could not be decoded, or -1 if no such block has been encountered.
+// Combined with WavpackGetNumErrors(), this lets an application report exactly where a
+// malformed block is located. The value is updated whenever a block error is detected.
+
+int64_t WavpackGetErrorOffset64 (WavpackContext *wpc);
 int WavpackLossyBlocks (WavpackContext *wpc);
 int WavpackSeekSample (WavpackContext *wpc, uint32_t sample);
 int WavpackSeekSample64 (WavpackContext *wpc, int64_t sample);

@@ -185,6 +185,14 @@ int WavpackGetNumErrors (WavpackContext *wpc)
     return wpc ? wpc->crc_errors : 0;
 }
 
+// Return the byte offset of the most recent malformed block, or -1 when none has
+// been seen (or the context pointer is NULL).
+
+int64_t WavpackGetErrorOffset64 (WavpackContext *wpc)
+{
+    return wpc ? wpc->error_block_offset : -1;
+}
+
 // return TRUE if any uncorrected lossy blocks were actually written or read
 
 int WavpackLossyBlocks (WavpackContext *wpc)
@@ -859,4 +867,3 @@ const char *WavpackGetLibraryVersionString (void)
 {
     return LIBWAVPACK_VERSION_STRING;
 }
-
