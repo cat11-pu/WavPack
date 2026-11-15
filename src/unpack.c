@@ -41,6 +41,107 @@ extern void ASMCALL DECORR_STEREO_PASS_CONT (struct decorr_pass *dpp, int32_t *b
 extern void ASMCALL DECORR_MONO_PASS_CONT (struct decorr_pass *dpp, int32_t *buffer, int32_t sample_count, int32_t long_math);
 #endif
 
+#if defined(OPT_ASM_X64)
+
+#if defined (_WIN64) || defined(__CYGWIN__) || defined(__MINGW64__) || defined(__midipix__)
+    #define DECORR_STEREO_PASS_CONT_FALLBACK unpack_decorr_stereo_pass_cont_x64win
+#else
+    #define DECORR_STEREO_PASS_CONT_FALLBACK unpack_decorr_stereo_pass_cont_x64
+#endif
+
+// The generic term 17/18 and -3 loops are short, sequential recurrences. The
+// assembly MMX loops process both channels together but have a high setup cost
+// for these terms, so use simple scalar loops for them and retain the assembly
+// implementation for the other terms and mono.
+
+#if defined(__GNUC__)
+#define WP_NOINLINE __attribute__((noinline))
+#elif defined(_MSC_VER)
+#define WP_NOINLINE __declspec(noinline)
+#else
+#define WP_NOINLINE
+#endif
+
+static inline int32_t decorr_apply_weight (int32_t weight, int32_t sample)
+{
+    return (int32_t) (((int64_t) weight * sample + 512) >> 10);
+}
+
+static void WP_NOINLINE ASMCALL unpack_decorr_stereo_pass_cont_fast (struct decorr_pass *dpp, int32_t *buffer,
+                                                                     int32_t sample_count, int32_t long_math)
+{
+    int32_t *bptr = buffer, *eptr = buffer + sample_count * 2;
+    int32_t wa = dpp->weight_A, wb = dpp->weight_B, delta = dpp->delta;
+    int term = dpp->term;
+
+    if (term == 17 || term == 18) {
+        int32_t prevA = dpp->samples_A [0], prevB = dpp->samples_B [0];
+        int32_t prev2A = dpp->samples_A [1], prev2B = dpp->samples_B [1];
+
+        while (bptr < eptr) {
+            int32_t samA, samB, resA = bptr [0], resB = bptr [1];
+            int32_t oldA = prevA, oldB = prevB;
+
+            if (term == 18) {
+                samA = prevA + ((prevA - prev2A) >> 1);
+                samB = prevB + ((prevB - prev2B) >> 1);
+            }
+            else {
+                samA = 2 * prevA - prev2A;
+                samB = 2 * prevB - prev2B;
+            }
+
+            bptr [0] = prevA = decorr_apply_weight (wa, samA) + resA;
+            bptr [1] = prevB = decorr_apply_weight (wb, samB) + resB;
+            update_weight (wa, delta, samA, resA);
+            update_weight (wb, delta, samB, resB);
+            prev2A = oldA;
+            prev2B = oldB;
+            bptr += 2;
+        }
+
+        dpp->samples_A [0] = prevA;
+        dpp->samples_B [0] = prevB;
+        dpp->samples_A [1] = prev2A;
+        dpp->samples_B [1] = prev2B;
+    }
+    else if (term == -3) {
+        int32_t srcA = dpp->samples_A [0], srcB = dpp->samples_B [0];
+
+        while (bptr < eptr) {
+            int32_t resA = bptr [0], resB = bptr [1];
+            int32_t outA = resA + decorr_apply_weight (wa, srcA);
+            int32_t outB = resB + decorr_apply_weight (wb, srcB);
+
+            update_weight_clip (wa, delta, srcA, resA);
+            update_weight_clip (wb, delta, srcB, resB);
+            bptr [0] = outA;
+            bptr [1] = outB;
+            srcA = outB;
+            srcB = outA;
+            bptr += 2;
+        }
+
+        dpp->samples_A [0] = srcA;
+        dpp->samples_B [0] = srcB;
+    }
+    else {
+        DECORR_STEREO_PASS_CONT_FALLBACK (dpp, buffer, sample_count, long_math);
+        return;
+    }
+
+    dpp->weight_A = wa;
+    dpp->weight_B = wb;
+}
+
+#undef DECORR_STEREO_PASS_CONT
+#define DECORR_STEREO_PASS_CONT unpack_decorr_stereo_pass_cont_fast
+#define DECORR_STEREO_PASS_CONT_AVAILABLE 1
+
+#undef WP_NOINLINE
+
+#endif
+
 // This flag provides the functionality of terminating the decoding and muting
 // the output when a lossy sample appears to be corrupt. This is automatic
 // for lossless files because a corrupt sample is unambiguous, but for lossy

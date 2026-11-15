@@ -33,6 +33,11 @@
 
 #include "wavpack_local.h"
 
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+#define USE_FAST_WORDS
+#define get_words_lossless get_words_lossless_reference
+#endif
+
 #if defined (HAVE___BUILTIN_CTZ) || defined (_WIN64)
 #define USE_CTZ_OPTIMIZATION    // use ctz intrinsic (or Windows equivalent) to count trailing ones
 #elif defined(__WATCOMC__) && defined(__386__)
@@ -628,3 +633,289 @@ static uint32_t __inline read_code (Bitstream *bs, uint32_t maxcode)
 
     return code;
 }
+
+#ifdef USE_FAST_WORDS
+
+#undef get_words_lossless
+
+#ifdef BITSTREAM_SHORTS
+typedef uint16_t bitword;
+#else
+typedef unsigned char bitword;
+#endif
+
+// This version keeps the bitstream and entropy state in locals and decodes
+// stereo pairs together. The bit-level sequence and all state transitions are
+// identical to get_words_lossless_reference().
+
+int32_t get_words_lossless (WavpackStream *wps, int32_t *buffer, int32_t nsamples)
+{
+    uint32_t ones_count, low, high;
+    int32_t csamples = 0;
+    int mono = (wps->wphdr.flags & MONO_DATA) != 0;
+    int wrap_error = 0;
+
+    if (nsamples && !wps->wvbits.ptr) {
+        memset (buffer, 0, mono ? nsamples * 4 : nsamples * 8);
+        return nsamples;
+    }
+
+    if (!mono)
+        nsamples *= 2;
+
+    bitword *ptr = wps->wvbits.ptr;
+    bitword *end = wps->wvbits.end;
+    uint64_t sr = wps->wvbits.sr;
+    int bc = wps->wvbits.bc;
+
+    uint32_t m0 = wps->w.c [0].median [0], m1 = wps->w.c [0].median [1], m2 = wps->w.c [0].median [2];
+    uint32_t s0 = wps->w.c [1].median [0], s1 = wps->w.c [1].median [1], s2 = wps->w.c [1].median [2];
+    uint32_t holding_one = wps->w.holding_one, zeros_acc = wps->w.zeros_acc;
+    int holding_zero = wps->w.holding_zero;
+
+#define REFILL_TO(limit) do { \
+        while (bc < (limit)) { \
+            if (++ptr == end) { \
+                wps->wvbits.error = 1; \
+                ptr = wps->wvbits.buf; \
+                wrap_error = 1; \
+            } \
+            sr |= (uint64_t) *ptr << bc; \
+            bc += sizeof (*ptr) * 8; \
+        } \
+    } while (0)
+
+#define GETBIT(result) do { \
+        if (bc) { \
+            result = (uint32_t) sr & 1; \
+            sr >>= 1; \
+            --bc; \
+        } \
+        else { \
+            if (++ptr == end) { \
+                wps->wvbits.error = 1; \
+                ptr = wps->wvbits.buf; \
+                wrap_error = 1; \
+            } \
+            bc = sizeof (*ptr) * 8 - 1; \
+            result = *ptr & 1; \
+            sr = (uint64_t) (*ptr >> 1); \
+        } \
+    } while (0)
+
+#define READ_SIGNED(maxcode, base, result) do { \
+        uint32_t rs_max = (maxcode); \
+        uint32_t rs_sign; \
+        if (rs_max < 2) { \
+            if (rs_max) { \
+                uint32_t rs_value; \
+                REFILL_TO (2); \
+                rs_value = (uint32_t) sr & 1; \
+                rs_sign = (uint32_t) (sr >> 1) & 1; \
+                sr >>= 2; \
+                bc -= 2; \
+                result = rs_sign ? ~(rs_value + (base)) : rs_value + (base); \
+            } \
+            else { \
+                REFILL_TO (1); \
+                rs_sign = (uint32_t) sr & 1; \
+                sr >>= 1; \
+                --bc; \
+                result = rs_sign ? ~(base) : (base); \
+            } \
+        } \
+        else { \
+            int rs_bitcount = count_bits (rs_max); \
+            const uint32_t rs_extras = bitset [rs_bitcount] - rs_max - 1; \
+            uint32_t rs_code, rs_value; \
+            REFILL_TO (rs_bitcount + 1); \
+            rs_code = (uint32_t) sr & bitmask [rs_bitcount - 1]; \
+            { \
+                uint32_t rs_take = rs_code >= rs_extras; \
+                rs_value = rs_take ? ((rs_code << 1) - rs_extras + \
+                    (uint32_t) ((sr >> (rs_bitcount - 1)) & 1)) : rs_code; \
+                rs_bitcount -= !rs_take; \
+            } \
+            rs_sign = (uint32_t) (sr >> rs_bitcount) & 1; \
+            sr >>= rs_bitcount + 1; \
+            bc -= rs_bitcount + 1; \
+            rs_value += (base); \
+            result = rs_sign ? ~rs_value : rs_value; \
+        } \
+    } while (0)
+
+#define FAST_GET_MED(med) (((med) >> 4) + 1)
+#define INC_MED(med, div) ((med) += (((med) + (div)) / (div)) * 5)
+#define DEC_MED(med, div) ((med) -= (((med) + ((div) - 2)) / (div)) * 2)
+
+#define DECODE_SAMPLE(M0, M1, M2, S0, OUT) do { \
+        int zero_sample = 0; \
+        if (holding_zero) { \
+            holding_zero = 0; \
+            READ_SIGNED (FAST_GET_MED (M0) - 1, 0, OUT); \
+            DEC_MED (M0, DIV0); \
+        } \
+        else { \
+            if (M0 < 2 && !holding_one && S0 < 2) { \
+                uint32_t mask; \
+                int cbits; \
+                if (zeros_acc) { \
+                    if (--zeros_acc) { \
+                        OUT = 0; \
+                        zero_sample = 1; \
+                    } \
+                } \
+                else { \
+                    uint32_t bit; \
+                    for (cbits = 0; cbits < 33; ++cbits) { \
+                        GETBIT (bit); \
+                        if (!bit) break; \
+                    } \
+                    if (cbits == 33) goto done; \
+                    if (cbits < 2) \
+                        zeros_acc = cbits; \
+                    else { \
+                        for (mask = 1, zeros_acc = 0; --cbits; mask <<= 1) { \
+                            GETBIT (bit); \
+                            if (bit) zeros_acc |= mask; \
+                        } \
+                        zeros_acc |= mask; \
+                    } \
+                    if (zeros_acc) { \
+                        m0 = m1 = m2 = 0; \
+                        s0 = s1 = s2 = 0; \
+                        OUT = 0; \
+                        zero_sample = 1; \
+                    } \
+                } \
+            } \
+            if (!zero_sample) { \
+                uint32_t bit; \
+                REFILL_TO (LIMIT_ONES); \
+                ones_count = __builtin_ctz ((uint32_t) ~sr); \
+                if (ones_count >= LIMIT_ONES) { \
+                    bc -= LIMIT_ONES; \
+                    sr >>= LIMIT_ONES; \
+                    ones_count = LIMIT_ONES; \
+                    while (ones_count < (LIMIT_ONES + 1)) { \
+                        GETBIT (bit); \
+                        if (!bit) break; \
+                        ++ones_count; \
+                    } \
+                    if (ones_count == (LIMIT_ONES + 1)) goto done; \
+                    if (ones_count == LIMIT_ONES) { \
+                        uint32_t mask; \
+                        int cbits; \
+                        for (cbits = 0; cbits < 33; ++cbits) { \
+                            GETBIT (bit); \
+                            if (!bit) break; \
+                        } \
+                        if (cbits == 33) goto done; \
+                        if (cbits < 2) \
+                            ones_count = cbits; \
+                        else { \
+                            for (mask = 1, ones_count = 0; --cbits; mask <<= 1) { \
+                                GETBIT (bit); \
+                                if (bit) ones_count |= mask; \
+                            } \
+                            ones_count |= mask; \
+                        } \
+                        ones_count += LIMIT_ONES; \
+                    } \
+                } \
+                else { \
+                    bc -= ones_count + 1; \
+                    sr >>= ones_count + 1; \
+                } \
+                low = holding_one; \
+                holding_one = ones_count & 1; \
+                holding_zero = ~ones_count & 1; \
+                ones_count = (ones_count >> 1) + low; \
+                if (ones_count == 0) { \
+                    low = 0; \
+                    high = FAST_GET_MED (M0) - 1; \
+                    DEC_MED (M0, DIV0); \
+                } \
+                else { \
+                    low = FAST_GET_MED (M0); \
+                    INC_MED (M0, DIV0); \
+                    if (ones_count == 1) { \
+                        high = low + FAST_GET_MED (M1) - 1; \
+                        DEC_MED (M1, DIV1); \
+                    } \
+                    else { \
+                        low += FAST_GET_MED (M1); \
+                        INC_MED (M1, DIV1); \
+                        if (ones_count == 2) { \
+                            high = low + FAST_GET_MED (M2) - 1; \
+                            DEC_MED (M2, DIV2); \
+                        } \
+                        else { \
+                            low += (ones_count - 2) * FAST_GET_MED (M2); \
+                            high = low + FAST_GET_MED (M2) - 1; \
+                            INC_MED (M2, DIV2); \
+                        } \
+                    } \
+                } \
+                READ_SIGNED (high - low, low, OUT); \
+            } \
+        } \
+        ++csamples; \
+    } while (0)
+
+    if (mono) {
+        while (csamples < nsamples)
+            DECODE_SAMPLE (m0, m1, m2, s0, buffer [csamples]);
+    }
+    else {
+        while (csamples + 1 < nsamples) {
+            DECODE_SAMPLE (m0, m1, m2, s0, buffer [csamples]);
+            DECODE_SAMPLE (s0, s1, s2, m0, buffer [csamples]);
+        }
+
+        if (csamples < nsamples)
+            DECODE_SAMPLE (m0, m1, m2, s0, buffer [csamples]);
+    }
+
+done:
+    if (wrap_error) {
+        ptr = wps->wvbits.buf;
+        bc = 0;
+        sr = 0;
+    }
+    else {
+        while (bc > 32) {
+            --ptr;
+            bc -= sizeof (*ptr) * 8;
+        }
+
+        sr &= ((uint64_t) 1 << bc) - 1;
+    }
+
+    wps->wvbits.ptr = ptr;
+    wps->wvbits.bc = bc;
+    wps->wvbits.sr = (uint32_t) sr;
+
+    wps->w.c [0].median [0] = m0;
+    wps->w.c [0].median [1] = m1;
+    wps->w.c [0].median [2] = m2;
+    wps->w.c [1].median [0] = s0;
+    wps->w.c [1].median [1] = s1;
+    wps->w.c [1].median [2] = s2;
+
+    wps->w.holding_one = holding_one;
+    wps->w.holding_zero = holding_zero;
+    wps->w.zeros_acc = zeros_acc;
+
+#undef REFILL_TO
+#undef GETBIT
+#undef READ_SIGNED
+#undef FAST_GET_MED
+#undef INC_MED
+#undef DEC_MED
+#undef DECODE_SAMPLE
+
+    return mono ? csamples : (csamples / 2);
+}
+
+#endif
